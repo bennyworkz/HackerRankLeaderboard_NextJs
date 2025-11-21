@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { db } from "@/lib/db";
+import * as XLSX from "xlsx";
 
 interface ProgressData {
   current: number;
@@ -10,9 +12,7 @@ interface ProgressData {
 
 interface DownloadFile {
   fileName: string;
-  data: string;
   totalEntries: number;
-  downloadUrl?: string;
 }
 
 export default function Home() {
@@ -23,10 +23,85 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Debug: Log when downloadFile changes
-  useEffect(() => {
-    console.log("downloadFile state changed:", downloadFile);
-  }, [downloadFile]);
+  // Format time taken
+  const formatTimeTaken = (seconds: number): string => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainingSeconds = seconds % 60;
+    return `${hours.toString().padStart(2, "0")}:${minutes
+      .toString()
+      .padStart(2, "0")}:${remainingSeconds.toString().padStart(2, "0")}`;
+  };
+
+  // Generate Excel from IndexedDB
+  const generateExcel = async (slug: string) => {
+    try {
+      console.log("Generating Excel from IndexedDB...");
+      
+      // Fetch all data from IndexedDB
+      const entries = await db.leaderboard
+        .where("contestSlug")
+        .equals(slug)
+        .sortBy("rank");
+
+      if (entries.length === 0) {
+        throw new Error("No data found in database");
+      }
+
+      console.log(`Found ${entries.length} entries in IndexedDB`);
+
+      // Format data for Excel
+      const formattedData = entries.map((entry) => ({
+        Rank: entry.rank || "N/A",
+        User: entry.hacker || "N/A",
+        "Solved Count": entry.solved_challenges || 0,
+        "Time Taken": entry.time_taken
+          ? formatTimeTaken(entry.time_taken)
+          : "N/A",
+        Score: entry.score || 0,
+      }));
+
+      // Create Excel file
+      const worksheet = XLSX.utils.json_to_sheet(formattedData);
+      worksheet["!cols"] = [
+        { wch: 8 },
+        { wch: 25 },
+        { wch: 15 },
+        { wch: 15 },
+        { wch: 10 },
+      ];
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Leaderboard");
+
+      // Generate and download
+      const excelBuffer = XLSX.write(workbook, {
+        type: "array",
+        bookType: "xlsx",
+      });
+      const blob = new Blob([excelBuffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${slug}_leaderboard.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      console.log("Excel file downloaded successfully!");
+      return true;
+    } catch (err) {
+      console.error("Excel generation error:", err);
+      setError(
+        `Failed to generate Excel: ${err instanceof Error ? err.message : "Unknown error"}`
+      );
+      return false;
+    }
+  };
 
   const handleScrape = async () => {
     if (!contestSlug) {
@@ -42,7 +117,11 @@ export default function Home() {
     abortControllerRef.current = new AbortController();
 
     try {
-      const response = await fetch("/api/scrape", {
+      // Clear previous data for this contest
+      console.log("Clearing previous data from IndexedDB...");
+      await db.leaderboard.where("contestSlug").equals(contestSlug).delete();
+
+      const response = await fetch("/api/scrape-json", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -73,9 +152,7 @@ export default function Home() {
 
         for (const line of lines) {
           try {
-            console.log("Received line:", line);
             const data = JSON.parse(line);
-            console.log("Parsed data:", data);
 
             if (data.type === "progress") {
               setProgress({
@@ -83,57 +160,35 @@ export default function Home() {
                 total: data.total,
                 percentage: data.percentage,
               });
+
+              // Store data in IndexedDB
+              if (data.data && Array.isArray(data.data)) {
+                const entries = data.data.map((item: any) => ({
+                  contestSlug,
+                  rank: item.rank,
+                  hacker: item.hacker,
+                  solved_challenges: item.solved_challenges,
+                  time_taken: item.time_taken,
+                  score: item.score,
+                  scrapedAt: new Date(),
+                }));
+
+                await db.leaderboard.bulkAdd(entries);
+                console.log(`Stored ${entries.length} entries in IndexedDB`);
+              }
             } else if (data.type === "complete") {
-              console.log("Complete event received!");
-              console.log("Data length:", data.data?.length || 0);
-              console.log("File name:", data.fileName);
-              console.log("Total entries:", data.totalEntries);
+              console.log("Scraping complete! Generating Excel...");
 
-              // Trigger download immediately
-              let downloadUrl = "";
-              try {
-                if (!data.data || data.data.length === 0) {
-                  throw new Error("No data received from server");
-                }
+              // Generate Excel from IndexedDB
+              const success = await generateExcel(contestSlug);
 
-                // Decode base64 to binary string (browser-compatible)
-                console.log("Decoding base64 data...");
-                const binaryString = atob(data.data);
-                console.log("Binary string length:", binaryString.length);
-                
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                  bytes[i] = binaryString.charCodeAt(i);
-                }
-                console.log("Bytes array created, length:", bytes.length);
-
-                const blob = new Blob([bytes], {
-                  type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              if (success) {
+                setDownloadFile({
+                  fileName: `${contestSlug}_leaderboard.xlsx`,
+                  totalEntries: data.totalEntries,
                 });
-                console.log("Blob created, size:", blob.size);
-                
-                downloadUrl = URL.createObjectURL(blob);
-                console.log("Blob URL created:", downloadUrl);
-                
-                const a = document.createElement("a");
-                a.href = downloadUrl;
-                a.download = data.fileName;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                console.log("Download triggered successfully");
-              } catch (err) {
-                console.error("Download error:", err);
-                setError(`Download failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
               }
 
-              // Set downloadFile state for UI update (keep URL for re-download)
-              setDownloadFile({
-                fileName: data.fileName,
-                data: "", // Don't store the large base64 data
-                totalEntries: data.totalEntries,
-                downloadUrl: downloadUrl,
-              });
               setIsLoading(false);
             } else if (data.type === "error") {
               setError(data.message);
@@ -154,26 +209,12 @@ export default function Home() {
     }
   };
 
-  // Manual download function in case auto-download fails
-  const handleManualDownload = () => {
-    if (downloadFile?.downloadUrl) {
-      const a = document.createElement("a");
-      a.href = downloadFile.downloadUrl;
-      a.download = downloadFile.fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+  // Manual download function - regenerate from IndexedDB
+  const handleManualDownload = async () => {
+    if (contestSlug) {
+      await generateExcel(contestSlug);
     }
   };
-
-  // Cleanup blob URL on unmount
-  useEffect(() => {
-    return () => {
-      if (downloadFile?.downloadUrl) {
-        URL.revokeObjectURL(downloadFile.downloadUrl);
-      }
-    };
-  }, [downloadFile?.downloadUrl]);
 
   return (
     <div className="container">
