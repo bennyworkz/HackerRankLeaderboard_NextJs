@@ -1,65 +1,261 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useRef, useEffect } from "react";
+
+interface ProgressData {
+  current: number;
+  total: number;
+  percentage: number;
+}
+
+interface DownloadFile {
+  fileName: string;
+  data: string;
+  totalEntries: number;
+  downloadUrl?: string;
+}
 
 export default function Home() {
+  const [contestSlug, setContestSlug] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [progress, setProgress] = useState<ProgressData | null>(null);
+  const [downloadFile, setDownloadFile] = useState<DownloadFile | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Debug: Log when downloadFile changes
+  useEffect(() => {
+    console.log("downloadFile state changed:", downloadFile);
+  }, [downloadFile]);
+
+  const handleScrape = async () => {
+    if (!contestSlug) {
+      setError("Please enter a contest slug");
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    setProgress(null);
+    setDownloadFile(null);
+
+    abortControllerRef.current = new AbortController();
+
+    try {
+      const response = await fetch("/api/scrape", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contestSlug,
+        }),
+        signal: abortControllerRef.current.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to start scraping");
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new Error("No response body");
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n").filter((line) => line.trim());
+
+        for (const line of lines) {
+          try {
+            console.log("Received line:", line);
+            const data = JSON.parse(line);
+            console.log("Parsed data:", data);
+
+            if (data.type === "progress") {
+              setProgress({
+                current: data.current,
+                total: data.total,
+                percentage: data.percentage,
+              });
+            } else if (data.type === "complete") {
+              console.log("Complete event received!", data);
+
+              // Trigger download immediately
+              let downloadUrl = "";
+              try {
+                // Decode base64 to binary string (browser-compatible)
+                const binaryString = atob(data.data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                  bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                const blob = new Blob([bytes], {
+                  type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                });
+                downloadUrl = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = downloadUrl;
+                a.download = data.fileName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                console.log("Download triggered successfully");
+              } catch (err) {
+                console.error("Download error:", err);
+                setError("Download failed. Please try again.");
+              }
+
+              // Set downloadFile state for UI update (keep URL for re-download)
+              setDownloadFile({
+                fileName: data.fileName,
+                data: "", // Don't store the large base64 data
+                totalEntries: data.totalEntries,
+                downloadUrl: downloadUrl,
+              });
+              setIsLoading(false);
+            } else if (data.type === "error") {
+              setError(data.message);
+              setIsLoading(false);
+            }
+          } catch (e) {
+            console.error("Error parsing JSON:", e, "Line:", line);
+          }
+        }
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
+        setError("Scraping cancelled");
+      } else {
+        setError(err instanceof Error ? err.message : "An error occurred");
+      }
+      setIsLoading(false);
+    }
+  };
+
+  // Manual download function in case auto-download fails
+  const handleManualDownload = () => {
+    if (downloadFile?.downloadUrl) {
+      const a = document.createElement("a");
+      a.href = downloadFile.downloadUrl;
+      a.download = downloadFile.fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  };
+
+  // Cleanup blob URL on unmount
+  useEffect(() => {
+    return () => {
+      if (downloadFile?.downloadUrl) {
+        URL.revokeObjectURL(downloadFile.downloadUrl);
+      }
+    };
+  }, [downloadFile?.downloadUrl]);
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="container">
+      <div className="card">
+        <div className="logo">
+          <img src="/image.png" alt="Logo" className="logo-image" />
+          <div className="logo-text">HackerRank Scraper</div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+
+        <div className="input-group">
+          <label htmlFor="contestSlug">Contest Slug</label>
+          <div className="input-wrapper">
+            <span className="input-icon">🔗</span>
+            <input
+              id="contestSlug"
+              type="text"
+              placeholder="your-contest-slug"
+              value={contestSlug}
+              onChange={(e) => setContestSlug(e.target.value)}
+              disabled={isLoading}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !isLoading && contestSlug) {
+                  handleScrape();
+                }
+              }}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          </div>
         </div>
-      </main>
+
+        <button
+          className="primary-button"
+          onClick={handleScrape}
+          disabled={isLoading || !contestSlug}
+        >
+          {isLoading ? "Scraping..." : "Start Scraping"}
+        </button>
+
+        {error && (
+          <div className="error">
+            <span>⚠️</span>
+            <span>{error}</span>
+          </div>
+        )}
+
+        {isLoading && !progress && (
+          <div className="loading">
+            <div className="spinner"></div>
+            <span>Initializing scraper...</span>
+          </div>
+        )}
+
+        {progress && !downloadFile && (
+          <div className="progress-section">
+            <div className="progress-label">
+              <span className="progress-text">Scraping leaderboard</span>
+              <span className="progress-percentage">
+                {progress.percentage}%
+              </span>
+            </div>
+            <div className="progress-bar-container">
+              <div
+                className="progress-bar"
+                style={{ width: `${progress.percentage}%` }}
+              ></div>
+            </div>
+            <div className="divider">
+              <span className="divider-text">
+                {progress.current} of {progress.total} entries
+              </span>
+            </div>
+          </div>
+        )}
+
+        {downloadFile && (
+          <div className="progress-section">
+            <div className="progress-label">
+              <span className="progress-text">✓ Download completed</span>
+              <span className="progress-percentage">100%</span>
+            </div>
+            <div className="progress-bar-container">
+              <div className="progress-bar" style={{ width: "100%" }}></div>
+            </div>
+            <div className="divider">
+              <span className="divider-text">
+                {downloadFile.totalEntries} entries • {downloadFile.fileName}
+              </span>
+            </div>
+            <button
+              className="primary-button"
+              onClick={handleManualDownload}
+              style={{ marginTop: "1rem" }}
+            >
+              📥 Download Again
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
