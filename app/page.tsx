@@ -84,22 +84,37 @@ export default function Home() {
                 percentage: data.percentage,
               });
             } else if (data.type === "complete") {
-              console.log("Complete event received!", data);
+              console.log("Complete event received!");
+              console.log("Data length:", data.data?.length || 0);
+              console.log("File name:", data.fileName);
+              console.log("Total entries:", data.totalEntries);
 
               // Trigger download immediately
               let downloadUrl = "";
               try {
+                if (!data.data || data.data.length === 0) {
+                  throw new Error("No data received from server");
+                }
+
                 // Decode base64 to binary string (browser-compatible)
+                console.log("Decoding base64 data...");
                 const binaryString = atob(data.data);
+                console.log("Binary string length:", binaryString.length);
+                
                 const bytes = new Uint8Array(binaryString.length);
                 for (let i = 0; i < binaryString.length; i++) {
                   bytes[i] = binaryString.charCodeAt(i);
                 }
+                console.log("Bytes array created, length:", bytes.length);
 
                 const blob = new Blob([bytes], {
                   type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 });
+                console.log("Blob created, size:", blob.size);
+                
                 downloadUrl = URL.createObjectURL(blob);
+                console.log("Blob URL created:", downloadUrl);
+                
                 const a = document.createElement("a");
                 a.href = downloadUrl;
                 a.download = data.fileName;
@@ -109,7 +124,7 @@ export default function Home() {
                 console.log("Download triggered successfully");
               } catch (err) {
                 console.error("Download error:", err);
-                setError("Download failed. Please try again.");
+                setError(`Download failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
               }
 
               // Set downloadFile state for UI update (keep URL for re-download)

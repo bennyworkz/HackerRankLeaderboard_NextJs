@@ -98,6 +98,11 @@ async function fetchLeaderboardPage(
     }
 }
 
+// Disable response buffering for streaming
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // 5 minutes max
+
 export async function POST(request: NextRequest) {
     try {
         const body: ScrapeRequestBody = await request.json();
@@ -207,18 +212,23 @@ export async function POST(request: NextRequest) {
 
                     console.log('Generating Excel buffer...');
                     const excelBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+                    console.log('Excel buffer size:', excelBuffer.length, 'bytes');
+                    
                     const base64Excel = Buffer.from(excelBuffer).toString('base64');
+                    console.log('Base64 string length:', base64Excel.length);
+
+                    const completeMessage = {
+                        type: 'complete',
+                        data: base64Excel,
+                        fileName: `${contestSlug}_leaderboard.xlsx`,
+                        totalEntries: formattedData.length,
+                    };
 
                     console.log('Sending complete event...');
+                    console.log('Complete message size:', JSON.stringify(completeMessage).length, 'bytes');
+                    
                     controller.enqueue(
-                        encoder.encode(
-                            JSON.stringify({
-                                type: 'complete',
-                                data: base64Excel,
-                                fileName: `${contestSlug}_leaderboard.xlsx`,
-                                totalEntries: formattedData.length,
-                            }) + '\n'
-                        )
+                        encoder.encode(JSON.stringify(completeMessage) + '\n')
                     );
 
                     console.log('Complete event sent successfully');
