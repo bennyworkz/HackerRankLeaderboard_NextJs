@@ -173,6 +173,7 @@ export async function POST(request: NextRequest) {
                     }
 
                     console.log('Formatting data for Excel...');
+                    console.log(allData);
                     const formattedData = allData
                         .sort((a, b) => a.rank - b.rank)
                         .map((model) => ({

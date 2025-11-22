@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { db } from "@/lib/db";
 import * as XLSX from "xlsx";
 
@@ -143,14 +143,24 @@ export default function Home() {
         throw new Error("No response body");
       }
 
+      let buffer = ""; // Buffer for incomplete JSON
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n").filter((line) => line.trim());
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+
+        // Split by newlines and process complete lines
+        const lines = buffer.split("\n");
+        
+        // Keep the last incomplete line in the buffer
+        buffer = lines.pop() || "";
 
         for (const line of lines) {
+          if (!line.trim()) continue;
+          
           try {
             const data = JSON.parse(line);
 
