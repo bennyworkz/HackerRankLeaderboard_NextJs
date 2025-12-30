@@ -5,18 +5,30 @@ export const metadata: Metadata = {
   title: "HackerRank Scraper",
   description: "Scrape HackerRank contest leaderboards",
   icons: {
-    icon: '/image.png', // Add this line if you put the image in the 'public' folder
+    icon: "/image.png",
   },
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body
+        className="
+          min-h-screen
+          bg-[#f5f5f5]
+          flex
+          items-center
+          justify-center
+          p-5
+          font-sans
+        "
+      >
+        {children}
+      </body>
     </html>
   );
 }
