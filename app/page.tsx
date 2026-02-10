@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { db } from "@/lib/db";
 import * as XLSX from "xlsx";
+import { trackPageView, trackScrapeStart, trackScrapeComplete } from "@/lib/analytics";
 
 interface ProgressData {
   current: number;
@@ -22,6 +23,11 @@ export default function Home() {
   const [downloadFile, setDownloadFile] = useState<DownloadFile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Track page view on mount
+  useEffect(() => {
+    trackPageView();
+  }, []);
 
   // Format time taken
   const formatTimeTaken = (seconds: number): string => {
@@ -114,6 +120,9 @@ export default function Home() {
     setProgress(null);
     setDownloadFile(null);
 
+    // Track scrape start
+    await trackScrapeStart(contestSlug);
+
     abortControllerRef.current = new AbortController();
 
     try {
@@ -189,6 +198,9 @@ export default function Home() {
             } else if (data.type === "complete") {
               console.log("Scraping complete! Generating Excel...");
 
+              // Track scrape completion
+              await trackScrapeComplete(contestSlug);
+
               // Generate Excel from IndexedDB
               const success = await generateExcel(contestSlug);
 
@@ -232,6 +244,23 @@ export default function Home() {
         <div className="logo">
           <img src="/image.png" alt="Logo" className="logo-image" />
           <div className="logo-text">HackerRank Scraper</div>
+        </div>
+
+        {/* Analytics Link */}
+        <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
+          <a 
+            href="/analytics" 
+            style={{ 
+              color: '#0070f3', 
+              textDecoration: 'none',
+              fontSize: '0.875rem',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.25rem'
+            }}
+          >
+            📊 View Analytics Dashboard
+          </a>
         </div>
 
         <div className="input-group">
